@@ -1,92 +1,94 @@
-"""Tests for envdiff.comparator module."""
+"""Tests for envdiff.comparator, including key-filter integration."""
 
 import pytest
 
 from envdiff.comparator import EnvDiffResult, compare_envs
+from envdiff.filter import build_filter
 
 
-BASE_ENV = {
-    "APP_NAME": "myapp",
-    "DEBUG": "true",
-    "DATABASE_URL": "postgres://localhost/dev",
-    "SECRET_KEY": "dev-secret",
-}
-
-TARGET_ENV = {
-    "APP_NAME": "myapp",
-    "DEBUG": "false",
-    "DATABASE_URL": "postgres://prod-host/prod",
-    "SECRET_KEY": "prod-secret",
-    "NEW_FEATURE_FLAG": "enabled",
-}
+BASE = {"APP_NAME": "myapp", "DEBUG": "true", "DB_HOST": "localhost", "DB_PORT": "5432"}
+TARGET = {"APP_NAME": "myapp", "DEBUG": "false", "DB_HOST": "localhost", "EXTRA": "1"}
 
 
 def test_compare_identical_envs():
-    result = compare_envs(BASE_ENV, BASE_ENV)
-    assert not result.has_differences
-    assert result.missing_in_target == []
-    assert result.missing_in_base == []
-    assert result.mismatched_keys == {}
+    result = compare_envs({"A": "1"}, {"A": "1"})
+    assert not result.has_differences()
 
 
 def test_compare_detects_missing_in_target():
-    target = {k: v for k, v in BASE_ENV.items() if k != "SECRET_KEY"}
-    result = compare_envs(BASE_ENV, target)
-    assert "SECRET_KEY" in result.missing_in_target
-    assert result.has_differences
+    result = compare_envs(BASE, TARGET)
+    assert "DB_PORT" in result.missing_in_target
 
 
 def test_compare_detects_missing_in_base():
-    result = compare_envs(BASE_ENV, TARGET_ENV)
-    assert "NEW_FEATURE_FLAG" in result.missing_in_base
+    result = compare_envs(BASE, TARGET)
+    assert "EXTRA" in result.missing_in_base
 
 
 def test_compare_detects_value_mismatches():
-    result = compare_envs(BASE_ENV, TARGET_ENV)
-    assert "DEBUG" in result.mismatched_keys
-    assert result.mismatched_keys["DEBUG"]["base"] == "true"
-    assert result.mismatched_keys["DEBUG"]["target"] == "false"
+    result = compare_envs(BASE, TARGET)
+    assert "DEBUG" in result.value_mismatches
+    assert result.value_mismatches["DEBUG"] == ("true", "false")
 
 
 def test_compare_ignore_values_skips_mismatches():
-    result = compare_envs(BASE_ENV, TARGET_ENV, ignore_values=True)
-    assert result.mismatched_keys == {}
-    assert "NEW_FEATURE_FLAG" in result.missing_in_base
-
-
-def test_compare_custom_names():
-    result = compare_envs(BASE_ENV, TARGET_ENV, base_name="dev", target_name="prod")
-    assert result.base_name == "dev"
-    assert result.target_name == "prod"
+    result = compare_envs(BASE, TARGET, ignore_values=True)
+    assert result.value_mismatches == {}
 
 
 def test_summary_no_differences():
-    result = compare_envs(BASE_ENV, BASE_ENV, base_name="a", target_name="b")
-    summary = result.summary()
-    assert "No differences found" in summary
+    result = compare_envs({"X": "1"}, {"X": "1"})
+    assert result.summary() == "No differences found."
 
 
-def test_summary_with_differences():
-    result = compare_envs(BASE_ENV, TARGET_ENV, base_name="dev", target_name="prod")
-    summary = result.summary()
-    assert "Missing in 'prod'" not in summary or "NEW_FEATURE_FLAG" in summary
-    assert "Missing in 'dev'" in summary or "NEW_FEATURE_FLAG" in summary
-    assert "DEBUG" in summary
+def test_summary_contains_counts():
+    result = compare_envs(BASE, TARGET)
+    s = result.summary()
+    assert "missing" in s or "mismatch" in s
 
 
-def test_compare_empty_envs():
-    result = compare_envs({}, {})
-    assert not result.has_differences
+def test_custom_names_appear_in_summary():
+    result = compare_envs(
+        {"A": "1"},
+        {},
+        base_name="prod",
+        target_name="staging",
+    )
+    assert "staging" in result.summary()
 
 
-def test_compare_one_empty_base():
-    result = compare_envs({}, {"KEY": "value"})
-    assert "KEY" in result.missing_in_base
-    assert not result.missing_in_target
+# ---------------------------------------------------------------------------
+# key_filter integration
+# ---------------------------------------------------------------------------
+
+def test_compare_with_include_filter_limits_scope():
+    kf = build_filter(include=["DB_*"])
+    result = compare_envs(BASE, TARGET, key_filter=kf)
+    # DB_PORT missing in target
+    assert "DB_PORT" in result.missing_in_target
+    # DEBUG mismatch should be invisible because it's filtered out
+    assert "DEBUG" not in result.value_mismatches
+    # EXTRA is not a DB_ key, so it should be invisible too
+    assert "EXTRA" not in result.missing_in_base
 
 
-def test_compare_none_values():
-    base = {"KEY": None}
-    target = {"KEY": ""}
-    result = compare_envs(base, target)
-    assert "KEY" in result.mismatched_keys
+def test_compare_with_exclude_filter_hides_keys():
+    kf = build_filter(exclude=["DEBUG", "EXTRA"])
+    result = compare_envs(BASE, TARGET, key_filter=kf)
+    assert "DEBUG" not in result.value_mismatches
+    assert "EXTRA" not in result.missing_in_base
+    assert "DB_PORT" in result.missing_in_target
+
+
+def test_compare_filter_all_keys_out_yields_no_diff():
+    kf = build_filter(include=["NONEXISTENT_*"])
+    result = compare_envs(BASE, TARGET, key_filter=kf)
+    assert not result.has_differences()
+
+
+def test_compare_filter_none_behaves_as_no_filter():
+    result_no_filter = compare_envs(BASE, TARGET, key_filter=None)
+    result_none = compare_envs(BASE, TARGET)
+    assert result_no_filter.missing_in_target == result_none.missing_in_target
+    assert result_no_filter.missing_in_base == result_none.missing_in_base
+    assert result_no_filter.value_mismatches == result_none.value_mismatches

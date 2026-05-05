@@ -1,84 +1,91 @@
-"""Compares parsed .env dictionaries and reports differences."""
+"""Compare two parsed .env dicts and report differences."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Optional
+
+from envdiff.filter import KeyFilter, build_filter
 
 
 @dataclass
 class EnvDiffResult:
-    """Holds the result of comparing two .env files."""
+    """Holds the diff between a *base* and *target* environment."""
 
-    base_name: str
-    target_name: str
-    missing_in_target: List[str] = field(default_factory=list)
-    missing_in_base: List[str] = field(default_factory=list)
-    mismatched_keys: Dict[str, Dict[str, Optional[str]]] = field(default_factory=dict)
+    missing_in_target: list[str] = field(default_factory=list)
+    missing_in_base: list[str] = field(default_factory=list)
+    value_mismatches: dict[str, tuple[str, str]] = field(default_factory=dict)
+    base_name: str = "base"
+    target_name: str = "target"
 
-    @property
     def has_differences(self) -> bool:
+        """Return True when any difference exists."""
         return bool(
-            self.missing_in_target or self.missing_in_base or self.mismatched_keys
+            self.missing_in_target or self.missing_in_base or self.value_mismatches
         )
 
     def summary(self) -> str:
-        lines = [f"Comparing '{self.base_name}' vs '{self.target_name}':"]
-        if not self.has_differences:
-            lines.append("  No differences found.")
-            return "\n".join(lines)
-
+        """Return a one-line human-readable summary."""
+        parts = []
         if self.missing_in_target:
-            lines.append(f"  Missing in '{self.target_name}':")
-            for key in sorted(self.missing_in_target):
-                lines.append(f"    - {key}")
-
+            parts.append(
+                f"{len(self.missing_in_target)} key(s) missing in {self.target_name}"
+            )
         if self.missing_in_base:
-            lines.append(f"  Missing in '{self.base_name}':")
-            for key in sorted(self.missing_in_base):
-                lines.append(f"    - {key}")
-
-        if self.mismatched_keys:
-            lines.append("  Value mismatches:")
-            for key in sorted(self.mismatched_keys):
-                base_val = self.mismatched_keys[key]["base"]
-                target_val = self.mismatched_keys[key]["target"]
-                lines.append(f"    ~ {key}: '{base_val}' != '{target_val}'")
-
-        return "\n".join(lines)
+            parts.append(
+                f"{len(self.missing_in_base)} key(s) missing in {self.base_name}"
+            )
+        if self.value_mismatches:
+            parts.append(f"{len(self.value_mismatches)} value mismatch(es)")
+        return ", ".join(parts) if parts else "No differences found."
 
 
 def compare_envs(
-    base: Dict[str, Optional[str]],
-    target: Dict[str, Optional[str]],
+    base: dict[str, str],
+    target: dict[str, str],
     base_name: str = "base",
     target_name: str = "target",
     ignore_values: bool = False,
+    key_filter: Optional[KeyFilter] = None,
 ) -> EnvDiffResult:
-    """Compare two parsed env dicts and return an EnvDiffResult.
+    """Compare *base* and *target* env dicts and return an :class:`EnvDiffResult`.
 
-    Args:
-        base: The reference environment mapping.
-        target: The environment mapping to compare against base.
-        base_name: Label for the base environment.
-        target_name: Label for the target environment.
-        ignore_values: If True, only check for missing keys, not value differences.
-
-    Returns:
-        An EnvDiffResult describing all differences.
+    Parameters
+    ----------
+    base:
+        The reference environment (e.g. ``.env.example``).
+    target:
+        The environment being validated (e.g. ``.env``).
+    base_name:
+        Human-readable label for *base* used in reports.
+    target_name:
+        Human-readable label for *target* used in reports.
+    ignore_values:
+        When *True*, only check for key presence; skip value comparison.
+    key_filter:
+        Optional :class:`~envdiff.filter.KeyFilter` to restrict which keys are
+        considered.  Pass ``None`` to include all keys.
     """
-    base_keys: Set[str] = set(base.keys())
-    target_keys: Set[str] = set(target.keys())
+    if key_filter is not None:
+        base = key_filter.filter_env(base)
+        target = key_filter.filter_env(target)
 
-    result = EnvDiffResult(base_name=base_name, target_name=target_name)
-    result.missing_in_target = list(base_keys - target_keys)
-    result.missing_in_base = list(target_keys - base_keys)
+    base_keys = set(base)
+    target_keys = set(target)
 
+    missing_in_target = sorted(base_keys - target_keys)
+    missing_in_base = sorted(target_keys - base_keys)
+
+    value_mismatches: dict[str, tuple[str, str]] = {}
     if not ignore_values:
-        common_keys = base_keys & target_keys
-        for key in common_keys:
+        for key in sorted(base_keys & target_keys):
             if base[key] != target[key]:
-                result.mismatched_keys[key] = {
-                    "base": base[key],
-                    "target": target[key],
-                }
+                value_mismatches[key] = (base[key], target[key])
 
-    return result
+    return EnvDiffResult(
+        missing_in_target=missing_in_target,
+        missing_in_base=missing_in_base,
+        value_mismatches=value_mismatches,
+        base_name=base_name,
+        target_name=target_name,
+    )
