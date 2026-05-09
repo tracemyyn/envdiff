@@ -43,6 +43,14 @@ class AuditResult:
             return "No audit issues found."
         return f"{self.error_count} error(s), {self.warn_count} warning(s) found."
 
+    def errors(self) -> List[AuditIssue]:
+        """Return only the issues with severity 'error'."""
+        return [i for i in self.issues if i.severity == "error"]
+
+    def warnings(self) -> List[AuditIssue]:
+        """Return only the issues with severity 'warn'."""
+        return [i for i in self.issues if i.severity == "warn"]
+
 
 def _is_sensitive_key(key: str) -> bool:
     upper = key.upper()
