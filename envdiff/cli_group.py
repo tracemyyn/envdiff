@@ -35,20 +35,32 @@ def build_group_parser(parent: argparse._SubParsersAction | None = None) -> argp
     return parser
 
 
+def _print_top_prefixes(result, top: int) -> None:
+    """Print the top N prefixes sorted by key count."""
+    prefixes = top_prefixes(result, n=top)
+    print(f"Top {top} prefixes by key count:")
+    for p in prefixes:
+        print(f"  {p}: {len(result.groups[p])} key(s)")
+
+
 def run_group(args: argparse.Namespace) -> int:
+    """Execute the group command with the parsed arguments.
+
+    Returns an exit code: 0 on success, 2 on error.
+    """
     try:
         env = parse_env_file(args.file)
-    except (EnvParseError, FileNotFoundError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+    except FileNotFoundError as exc:
+        print(f"Error: File not found: {exc}", file=sys.stderr)
+        return 2
+    except EnvParseError as exc:
+        print(f"Error: Failed to parse env file: {exc}", file=sys.stderr)
         return 2
 
     result = group_env(env, separator=args.separator, min_prefix_length=args.min_prefix)
 
     if args.top > 0:
-        prefixes = top_prefixes(result, n=args.top)
-        print(f"Top {args.top} prefixes by key count:")
-        for p in prefixes:
-            print(f"  {p}: {len(result.groups[p])} key(s)")
+        _print_top_prefixes(result, args.top)
     else:
         print(result.summary())
 
